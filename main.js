@@ -175,6 +175,11 @@ class Player {
     getAutoMergeCount() {
         return this.autoMergeCount;
     }
+
+    // 인벤토리 내 특정 자원 개수 반환
+    getInventoryCount(type, level) {
+        return this.inventory.filter(r => r.type === type && r.level === level).length;
+    }
 }
 
 /**
