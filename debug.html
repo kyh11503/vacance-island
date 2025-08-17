@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>게임 디버깅</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .debug-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+        .warning {
+            color: orange;
+            font-weight: bold;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #console-output {
+            background: #000;
+            color: #0f0;
+            padding: 20px;
+            border-radius: 5px;
+            font-family: monospace;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 게임 디버깅 도구</h1>
+    
+    <div class="debug-section">
+        <h2>🔍 파일 상태 확인</h2>
+        <div id="file-status"></div>
+        <button onclick="checkFiles()">파일 상태 확인</button>
+    </div>
+    
+    <div class="debug-section">
+        <h2>🖼️ 이미지 로딩 테스트</h2>
+        <div id="image-status"></div>
+        <button onclick="testImages()">이미지 로딩 테스트</button>
+    </div>
+    
+    <div class="debug-section">
+        <h2>📝 콘솔 출력</h2>
+        <div id="console-output"></div>
+        <button onclick="clearConsole()">콘솔 지우기</button>
+    </div>
+    
+    <div class="debug-section">
+        <h2>🎯 게임 테스트</h2>
+        <button onclick="testGame()">게임 테스트</button>
+        <button onclick="openMainGame()">메인 게임 열기</button>
+    </div>
+
+    <script>
+        // 콘솔 출력을 캡처
+        const originalConsoleLog = console.log;
+        const originalConsoleError = console.error;
+        const originalConsoleWarn = console.warn;
+        
+        const consoleOutput = document.getElementById('console-output');
+        
+        function addToConsole(message, type = 'log') {
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = type === 'error' ? '❌' : type === 'warn' ? '⚠️' : 'ℹ️';
+            consoleOutput.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+        
+        console.log = function(...args) {
+            originalConsoleLog.apply(console, args);
+            addToConsole(args.join(' '));
+        };
+        
+        console.error = function(...args) {
+            originalConsoleError.apply(console, args);
+            addToConsole(args.join(' '), 'error');
+        };
+        
+        console.warn = function(...args) {
+            originalConsoleWarn.apply(console, args);
+            addToConsole(args.join(' '), 'warn');
+        };
+        
+        // 파일 상태 확인
+        function checkFiles() {
+            const fileStatus = document.getElementById('file-status');
+            const files = [
+                'index.html',
+                'main.js',
+                'style.css',
+                'Art/Background.png',
+                'Art/Pool.png',
+                'Art/Resort.png',
+                'Art/Seaside.png',
+                'Art/SubmergeBackground.png'
+            ];
+            
+            let statusHTML = '';
+            
+            files.forEach(file => {
+                fetch(file)
+                    .then(response => {
+                        if (response.ok) {
+                            statusHTML += `<div class="success">✅ ${file} - 로드 성공</div>`;
+                        } else {
+                            statusHTML += `<div class="error">❌ ${file} - 로드 실패 (${response.status})</div>`;
+                        }
+                        fileStatus.innerHTML = statusHTML;
+                    })
+                    .catch(error => {
+                        statusHTML += `<div class="error">❌ ${file} - 로드 실패 (${error.message})</div>`;
+                        fileStatus.innerHTML = statusHTML;
+                    });
+            });
+        }
+        
+        // 이미지 로딩 테스트
+        function testImages() {
+            const imageStatus = document.getElementById('image-status');
+            const images = [
+                'Art/Background.png',
+                'Art/Pool.png',
+                'Art/Resort.png',
+                'Art/Seaside.png',
+                'Art/SubmergeBackground.png'
+            ];
+            
+            let statusHTML = '';
+            let loadedCount = 0;
+            
+            images.forEach(filename => {
+                const img = new Image();
+                img.onload = () => {
+                    loadedCount++;
+                    statusHTML += `<div class="success">✅ ${filename} - 로드 성공</div>`;
+                    if (loadedCount === images.length) {
+                        imageStatus.innerHTML = statusHTML;
+                    }
+                };
+                img.onerror = () => {
+                    loadedCount++;
+                    statusHTML += `<div class="error">❌ ${filename} - 로드 실패</div>`;
+                    if (loadedCount === images.length) {
+                        imageStatus.innerHTML = statusHTML;
+                    }
+                };
+                img.src = filename;
+            });
+        }
+        
+        // 콘솔 지우기
+        function clearConsole() {
+            consoleOutput.textContent = '';
+        }
+        
+        // 게임 테스트
+        function testGame() {
+            try {
+                // main.js 로드 테스트
+                const script = document.createElement('script');
+                script.src = 'main.js';
+                script.onload = () => {
+                    addToConsole('✅ main.js 로드 성공');
+                    if (typeof Game !== 'undefined') {
+                        addToConsole('✅ Game 클래스 정의됨');
+                    } else {
+                        addToConsole('❌ Game 클래스 정의되지 않음');
+                    }
+                };
+                script.onerror = () => {
+                    addToConsole('❌ main.js 로드 실패');
+                };
+                document.head.appendChild(script);
+            } catch (error) {
+                addToConsole(`❌ 게임 테스트 중 오류: ${error.message}`);
+            }
+        }
+        
+        // 메인 게임 열기
+        function openMainGame() {
+            window.open('index.html', '_blank');
+        }
+        
+        // 페이지 로드 시 자동으로 파일 상태 확인
+        window.addEventListener('load', () => {
+            addToConsole('🚀 디버깅 도구 로드 완료');
+            checkFiles();
+        });
+    </script>
+</body>
+</html>

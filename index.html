@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>바캉스 아일랜드: 더위 탈출 프로젝트</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 로딩 화면 -->
+    <div id="loading-screen" class="screen">
+        <div class="loading-content">
+            <h1>🏝️ 바캉스 아일랜드: 더위 탈출 프로젝트</h1>
+            <div class="loading-bar">
+                <div class="loading-progress"></div>
+            </div>
+            <p>무서운 폭염을 피해 전설의 휴양지 바캉스 아일랜드로 향하고 있습니다..</p>
+        </div>
+    </div>
+
+    <!-- 메인 게임 화면 -->
+    <div id="main-screen" class="screen hidden">
+        <!-- 상단 UI -->
+        <div class="top-ui">
+            <div class="player-info">
+                <div class="character-avatar">🏖️</div>
+                <div class="player-stats">
+                    <span class="player-level">Lv. <span id="player-level">1</span> <span class="exp-info">(<span id="current-exp">0</span>/<span id="required-exp">10</span>)</span></span>
+                    <div class="resources">
+                        <span class="coins">💰 <span id="coins">100</span></span>
+                        <span class="gems">💎 <span id="gems">5</span></span>
+                        <span class="tickets">🎫 <span id="tickets">3</span></span>
+                    </div>
+                </div>
+            </div>
+            <div class="top-buttons">
+                <button id="shop-btn" class="ui-button">🏪 상점</button>
+                <button id="settings-btn" class="ui-button">⚙️ 설정</button>
+                <button id="reset-game-btn" class="ui-button reset-btn" title="게임을 처음부터 다시 시작합니다">🔄 초기화</button>
+            </div>
+        </div>
+
+        <!-- 메인 컨텐츠 -->
+        <div class="main-content">
+            <!-- 머지 보드 -->
+            <div class="merge-board-container">
+                <h3>머지 보드</h3>
+                
+                <!-- 판매 모드, 자원 생성 버튼과 생성 가능 횟수 UI를 상단으로 이동 -->
+                <div class="board-actions">
+                    <button id="auto-merge-btn" class="action-button" title="자동 머지 아이템 사용">
+                        🔄 <span id="auto-merge-count">0</span>
+                    </button>
+                    <button id="sell-mode" class="action-button" title="자원을 선택하여 판매합니다">💰 판매 모드</button>
+                    <button id="spawn-resource" class="action-button" title="새로운 자원을 생성합니다">➕ 자원 생성</button>
+                    <div class="spawn-info">
+                        <div class="spawn-counter" id="spawn-counter">
+                            <span>생성 가능: <span id="spawn-count">15</span>/15</span>
+                        </div>
+                        <div class="spawn-cooldown" id="spawn-cooldown" style="display: none;">
+                            <span>쿨타임: <span id="cooldown-timer">0</span>초</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 건물들이 배치될 영역과 머지 보드를 포함하는 컨테이너 -->
+                <div class="board-area">
+                    <!-- 좌측과 우측 건물들, 그리고 가운데 머지 보드 -->
+                    <div class="board-middle">
+                        <div class="buildings-left">
+                            <div id="resort-building" class="surrounding-building resort" style="display: none;">
+                                <div class="building-complete"><img src="Art/Resort.png" alt="리조트" style="width: 100%; height: 100%; object-fit: contain;"></div>
+                            </div>
+                        </div>
+                        
+                        <div id="merge-board" class="merge-board"></div>
+                        
+                        <div class="buildings-right">
+                            <div id="pool-building" class="surrounding-building pool" style="display: none;">
+                                <div class="building-complete"><img src="Art/Pool.png" alt="수영장" style="width: 100%; height: 100%; object-fit: contain;"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 하단 건물들 -->
+                    <div class="buildings-bottom">
+                        <div id="beach-building" class="surrounding-building beach" style="display: none;">
+                            <div class="building-complete"><img src="Art/Seaside.png" alt="해변가" style="width: 100%; height: 100%; object-fit: contain;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 사이드 패널 -->
+            <div class="side-panel">
+                <!-- 퀘스트 -->
+                <div class="quest-panel">
+                    <h3>퀘스트</h3>
+                    <div class="quest-filters">
+                        <button id="quest-filter-all" class="quest-filter-btn active" data-filter="all">전체</button>
+                        <button id="quest-filter-active" class="quest-filter-btn" data-filter="active">진행중</button>
+                        <button id="quest-filter-completed" class="quest-filter-btn" data-filter="completed">완료</button>
+                    </div>
+                    <div id="quest-list" class="quest-list"></div>
+                </div>
+
+                <!-- 스테이지 -->
+                <div class="stage-panel">
+                    <h3>스테이지</h3>
+                    <div class="stage-selection">
+                        <div class="available-stages">
+                            <span>진행 가능한 스테이지:</span>
+                            <div id="stage-list" class="stage-list"></div>
+                        </div>
+                        <div class="selected-stage">
+                            <span>선택된 스테이지: <span id="selected-stage">1-1</span></span>
+                            <button id="stage-btn" class="ui-button">🎯 스테이지 시작 (클리어 시 티켓 -1)</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 건물 복원 -->
+                <div class="building-panel">
+                    <h3>🏗️ 건물 건설</h3>
+                    <div id="building-list" class="building-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 스테이지 화면 -->
+    <div id="stage-screen" class="screen hidden">
+        <div class="stage-header">
+            <button id="back-to-main" class="ui-button">⬅️ 돌아가기</button>
+            <div class="stage-info">
+                <h2>스테이지 <span id="stage-title">1-1</span></h2>
+                <div class="stage-objective">
+                                            <span>목표: </span>
+                        <span id="stage-goal">같은 자원 2개를 합쳐 상위 자원 생성</span>
+                </div>
+                <div class="stage-progress">
+                    <span>진행도: </span>
+                    <span id="stage-progress">0/1</span>
+                </div>
+            </div>
+            <div class="stage-resources">
+                <span class="tickets">🎫 보유: <span id="stage-tickets">3</span></span>
+            </div>
+        </div>
+        <div class="stage-board-container">
+            <div id="stage-board" class="merge-board"></div>
+        </div>
+        <div class="stage-actions">
+            <button id="stage-complete" class="action-button disabled">🏆 완료 (티켓 -1)</button>
+            <button id="stage-reset" class="action-button">🔄 다시 시작</button>
+        </div>
+    </div>
+
+    <!-- 상점 화면 -->
+    <div id="shop-screen" class="screen hidden">
+        <div class="shop-header">
+            <button id="close-shop" class="ui-button">❌ 닫기</button>
+            <h2>🏪 상점</h2>
+        </div>
+        <div class="shop-content">
+            <div class="shop-tabs">
+                <button class="shop-tab active" data-tab="resources">자원</button>
+                <button class="shop-tab" data-tab="tools">도구</button>
+                <button class="shop-tab" data-tab="premium">프리미엄</button>
+            </div>
+            <div id="shop-items" class="shop-items"></div>
+        </div>
+    </div>
+
+    <!-- 알림/팝업 -->
+    <div id="notification" class="notification hidden">
+        <div class="notification-content">
+            <span id="notification-text"></span>
+            <button id="close-notification">✕</button>
+        </div>
+    </div>
+
+    <!-- 게임 초기화 확인 팝업 -->
+    <div id="reset-confirmation" class="reset-confirmation hidden">
+        <div class="reset-modal">
+            <div class="reset-header">
+                <h3>⚠️ 게임 초기화</h3>
+            </div>
+            <div class="reset-content">
+                <p><strong>정말로 게임을 초기화하시겠습니까?</strong></p>
+                <p>이 작업은 되돌릴 수 없으며, 다음 데이터가 모두 삭제됩니다:</p>
+                <ul>
+                    <li>🎯 모든 퀘스트 진행도</li>
+                    <li>💰 코인, 💎 젬, 🎫 티켓</li>
+                    <li>🏗️ 건물 건설 진행도</li>
+                    <li>📋 보드 위의 모든 자원</li>
+                    <li>📊 스테이지 진행도</li>
+                    <li>💾 저장된 모든 게임 데이터</li>
+                </ul>
+                <p class="warning-text">⚠️ 이 작업은 완전히 되돌릴 수 없습니다!</p>
+            </div>
+            <div class="reset-buttons">
+                <button id="confirm-reset" class="reset-button danger">🗑️ 초기화 실행</button>
+                <button id="cancel-reset" class="reset-button safe">❌ 취소</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 배경음악 -->
+    <audio id="background-music" loop>
+        <source src="Serge Quadrado - Sun Fun.mp3" type="audio/mpeg">
+        브라우저가 오디오를 지원하지 않습니다.
+    </audio>
+
+    <!-- 스테이지 배경음악 -->
+    <audio id="stage-music" loop>
+        <source src="Serge Quadrado - Indie Game Soundtrack.mp3.mp3" type="audio/mpeg">
+        브라우저가 오디오를 지원하지 않습니다.
+    </audio>
+
+    <!-- 스테이지 배경음악 -->
+    <script src="js/constants.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
