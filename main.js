@@ -1245,6 +1245,17 @@ class Game {
                     this.mergeHistory = data.mergeHistory;
                 }
                 
+                // 스테이지 진행 상태 복원
+                if (data.stages) {
+                    data.stages.forEach(savedStage => {
+                        const stage = this.stages.find(s => s.world === savedStage.world && s.level === savedStage.level);
+                        if (stage) {
+                            stage.completed = savedStage.completed;
+                            console.log(`✅ 스테이지 ${savedStage.world}-${savedStage.level} 진행 상태 복원: ${savedStage.completed ? '클리어' : '미클리어'}`);
+                        }
+                    });
+                }
+                
                 // 자원 생성 시스템 복원
                 if (data.spawnSystemData) {
                     this.maxSpawnCount = data.spawnSystemData.maxSpawnCount || 15;
@@ -1580,6 +1591,32 @@ class Game {
     }
 
     /**
+     * 메인 보드 주변 셀 확인 (콤보 시스템용)
+     * 기준 자원의 상하좌우와 대각선 4방향, 총 8칸 범위 확인
+     */
+    getMainBoardAdjacentCells(x, y) {
+        const adjacent = [];
+        const directions = [
+            [-1, -1], [-1, 0], [-1, 1],  // 위쪽 3방향
+            [0, -1],           [0, 1],    // 좌우 2방향
+            [1, -1],  [1, 0],  [1, 1]    // 아래쪽 3방향
+        ];
+
+        // 메인 보드는 항상 5x5
+        const boardSize = 5;
+
+        directions.forEach(([dx, dy]) => {
+            const newX = x + dx;
+            const newY = y + dy;
+            if (newX >= 0 && newX < boardSize && newY >= 0 && newY < boardSize) {
+                adjacent.push({ x: newX, y: newY });
+            }
+        });
+
+        return adjacent;
+    }
+
+    /**
      * 머지 위치 주변의 장애물에 대미지 적용
      */
     damageNearbyTrashObstacles(mergeX, mergeY, damage = 25) {
@@ -1728,6 +1765,13 @@ class Game {
             stageBoard: this.saveBoardData('stage'),
             quests: this.saveQuestData(),
             mergeHistory: this.mergeHistory,
+            stages: this.stages.map(stage => ({
+                world: stage.world,
+                level: stage.level,
+                completed: stage.completed,
+                objectives: stage.objectives,
+                rewards: stage.rewards
+            })),
             spawnSystemData: {
                 currentSpawnCount: this.currentSpawnCount,
                 maxSpawnCount: this.maxSpawnCount,
@@ -1877,6 +1921,14 @@ class Game {
         this.renderBoard('main');
         this.updateSurroundingBuildings(); // 주변 건물 업데이트
         this.updateUI(); // 전체 UI 업데이트 (스테이지 목록 포함)
+        
+        // 스테이지 리스트와 선택된 스테이지 정보 명시적 업데이트
+        this.renderStageList();
+        const selectedStageElement = document.getElementById('selected-stage');
+        if (selectedStageElement) {
+            selectedStageElement.textContent = `${this.selectedStage.world}-${this.selectedStage.level}`;
+        }
+        
         this.saveGameData(); // 메인 화면으로 돌아갈 때 저장
         
         // 메인 화면에서 스테이지 음악 정지하고, 음악이 활성화되어 있을 때만 배경음악 재생
@@ -2684,6 +2736,45 @@ class Game {
     }
 
     /**
+     * 머지할 2개 자원 쌍 찾기 (콤보용)
+     * 중복 제한 없이 인접한 같은 자원을 찾음
+     */
+    findMergePairForCombo(board, x, y, type, level, boardSize = 5) {
+        const currentResource = board[y][x];
+        if (!currentResource || currentResource.type !== type || currentResource.level !== level) {
+            return [];
+        }
+
+        // 8방향 확인하여 인접한 같은 자원 찾기
+        const directions = [
+            [-1, -1], [-1, 0], [-1, 1],
+            [0, -1],           [0, 1],
+            [1, -1],  [1, 0],  [1, 1]
+        ];
+
+        for (const [dx, dy] of directions) {
+            const newX = x + dx;
+            const newY = y + dy;
+            
+            if (newX >= 0 && newX < boardSize && newY >= 0 && newY < boardSize) {
+                const adjacentResource = board[newY][newX];
+                if (adjacentResource && 
+                    adjacentResource.type === type && 
+                    adjacentResource.level === level) {
+                    
+                    // 콤보용이므로 중복 제한 없이 첫 번째로 발견된 인접 자원과 쌍 생성
+                    return [
+                        { x, y, resource: currentResource },
+                        { x: newX, y: newY, resource: adjacentResource }
+                    ];
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * 머지할 2개 자원 쌍 찾기
      * 중복 검사를 피하기 위해 더 작은 좌표의 자원만 확인
      */
@@ -2763,6 +2854,7 @@ class Game {
     /**
      * 머지 실행
      * 4레벨 자원끼리는 합성되지 않지만, 1~3레벨 자원은 자유롭게 합성 가능
+     * 콤보 시스템: 머지 후 주변 자원을 확인하여 연속 머지 실행
      * @param {Array} group - 머지할 자원 그룹
      * @param {string} boardType - 'main' 또는 'stage'
      * @param {boolean} isAutoMerge - 자동 머지 여부(기본값 false)
@@ -2780,27 +2872,33 @@ class Game {
         if (firstResource.level >= 4) {
             return;
         }
+        
         // 애니메이션 효과
         group.forEach(item => {
             if (item.resource.element) {
                 item.resource.element.classList.add('merging');
             }
         });
+        
         setTimeout(() => {
             // 첫 번째 위치에 상위 레벨 자원 생성
             const newResource = new Resource(firstResource.type, firstResource.level + 1, group[0].x, group[0].y);
             board[group[0].y][group[0].x] = newResource;
+            
             // 두 번째 자원 제거 (2개 머지)
             if (group.length >= 2) {
                 const secondItem = group[1];
                 board[secondItem.y][secondItem.x] = null;
             }
+            
             // 보드 다시 렌더링
             this.renderBoard(boardType);
+            
             // 메인 보드에서만 통계 업데이트
             if (boardType === 'main') {
                 this.updateMergeStats(firstResource.type, newResource.level);
             }
+            
             // 머지 후 랜덤 자원 생성 로직 제거됨
             // 메인 보드에서만 퀘스트 업데이트 (자동 머지일 때는 제외)
             if (boardType === 'main' && !isAutoMerge) {
@@ -2815,6 +2913,7 @@ class Game {
                     this.updateQuests('create_level4', 1);
                 }
             }
+            
             // 스테이지 진행도 업데이트 및 서브 머지 보상
             if (boardType === 'stage') {
                 this.updateStageProgress('create', newResource.type, newResource.level, 1);
@@ -2826,11 +2925,190 @@ class Game {
                     this.showSubMergeNotification(`⚡ ${destroyedCount}개 쓰레기에 ${damageAmount} 대미지!`);
                 }
             }
-            // 메인 보드 머지 후 저장
+            
+            // 메인 보드에서만 콤보 시스템 적용
             if (boardType === 'main') {
+                // 콤보 체크 및 연속 머지 실행 (새로 생성된 자원의 타입과 레벨 전달)
+                this.checkComboMerges(newResource.x, newResource.y, newResource.type, newResource.level);
+                // 메인 보드 머지 후 저장
                 this.saveGameData();
             }
         }, 500);
+    }
+
+    /**
+     * 콤보 머지 체크 및 실행
+     * 새로 생성된 자원과 같은 레벨, 같은 종류의 머지 가능한 자원이 주변에 있을 때 연속으로 머지
+     * 예시: 1레벨 식물 2개 → 2레벨 식물 1개 생성 시, 주변에 2레벨 식물이 있으면 콤보 발동
+     * @param {number} mergeX - 새로 생성된 자원의 X 좌표
+     * @param {number} mergeY - 새로 생성된 자원의 Y 좌표
+     * @param {string} resourceType - 새로 생성된 자원의 타입
+     * @param {number} resourceLevel - 새로 생성된 자원의 레벨
+     */
+    checkComboMerges(mergeX, mergeY, resourceType, resourceLevel) {
+        const board = this.board;
+        const boardSize = 5;
+        let comboCount = 0;
+        let totalCombo = 0;
+        
+
+        
+        const executeCombo = () => {
+            let comboFound = false;
+            
+            // 새로 생성된 자원 위치 주변 8방향 확인 (상하좌우 + 대각선 4방향)
+            const adjacentPositions = this.getMainBoardAdjacentCells(mergeX, mergeY);
+            
+            console.log(`🔍 콤보 체크: (${mergeX}, ${mergeY}) 위치의 ${resourceType} Lv.${resourceLevel} 주변 8칸 확인`);
+            console.log(`📍 주변 8칸 위치:`, adjacentPositions);
+            
+            for (const pos of adjacentPositions) {
+                const { x, y } = pos;
+                if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) continue;
+                
+                const resource = board[y][x];
+                if (!resource || resource.level >= 4) continue;
+                
+                console.log(`🔍 위치 (${x}, ${y}) 자원 확인:`, resource ? `${resource.type} Lv.${resource.level}` : 'null');
+                
+                // 새로 생성된 자원과 같은 레벨, 같은 종류의 자원만 콤보 대상
+                if (resource.type !== resourceType || resource.level !== resourceLevel) {
+                    console.log(`❌ 콤보 대상 아님: ${resource.type} Lv.${resource.level} != ${resourceType} Lv.${resourceLevel}`);
+                    continue;
+                }
+                
+                console.log(`✅ 콤보 대상 발견: ${resource.type} Lv.${resource.level} at (${x}, ${y})`);
+                
+                // 인접한 같은 타입/레벨 자원 찾기 (콤보용 - 중복 제한 없음)
+                const mergePair = this.findMergePairForCombo(board, x, y, resource.type, resource.level, boardSize);
+                console.log(`🔍 머지 쌍 검색 결과:`, mergePair);
+                
+                if (mergePair.length === 2) {
+                    comboFound = true;
+                    comboCount++;
+                    totalCombo++;
+                    
+
+                    
+                    // 콤보 알림 표시 (콤보×2, 콤보×3 형식)
+                    this.showComboNotification(`콤보×${totalCombo + 1}`, totalCombo);
+                    
+                    // 연속 머지 실행 (콤보로 처리)
+                    this.executeMerge(mergePair, 'main', false);
+                    
+                    // 다음 콤보 체크를 위해 잠시 대기
+                    setTimeout(() => {
+                        // 새로 생성된 자원 주변에서 콤보 가능 여부 확인
+                        if (mergePair[0] && mergePair[0].resource) {
+                            const newX = mergePair[0].x;
+                            const newY = mergePair[0].y;
+                            const newType = mergePair[0].resource.type;
+                            const newLevel = mergePair[0].resource.level;
+                            // 새로 생성된 자원 주변에서 콤보 체크
+                            this.checkComboMerges(newX, newY, newType, newLevel);
+                        }
+                    }, 800);
+                    
+                    break; // 한 번에 하나씩만 처리
+                }
+            }
+            
+            // 콤보가 더 이상 없으면 종료
+            if (!comboFound) {
+                if (totalCombo > 0) {
+                    // 콤보 완료 알림
+                    this.showComboNotification(`콤보 완료! 총 ${totalCombo}콤보!`, totalCombo, true);
+                }
+            }
+        };
+        
+        // 첫 번째 콤보 체크 실행
+        setTimeout(executeCombo, 300);
+    }
+
+
+
+    /**
+     * 콤보 알림 표시
+     * @param {string} message - 표시할 메시지
+     * @param {number} comboCount - 콤보 수
+     * @param {boolean} isFinal - 최종 콤보 여부
+     */
+    showComboNotification(message, comboCount, isFinal = false) {
+        // 기존 콤보 알림이 있다면 제거
+        const existingNotification = document.querySelector('.combo-notification');
+        if (existingNotification) {
+            existingNotification.remove();
+        }
+        
+        // 콤보 알림 요소 생성
+        const notification = document.createElement('div');
+        notification.className = 'combo-notification';
+        
+        // 최종 콤보가 아닌 경우 콤보×N 형식으로 표시 (숫자 없이)
+        if (!isFinal && message.includes('콤보×')) {
+            notification.innerHTML = `
+                <div class="combo-content">
+                    <span class="combo-text">${message}</span>
+                </div>
+            `;
+        } else {
+            // 최종 콤보인 경우 기존 형식 유지
+            notification.innerHTML = `
+                <div class="combo-content">
+                    <span class="combo-text">${message}</span>
+                    ${comboCount > 0 ? `<span class="combo-count">${comboCount}</span>` : ''}
+                </div>
+            `;
+        }
+        
+        // 스타일 적용
+        notification.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, #ff6b6b, #ffa500);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            font-size: 24px;
+            font-weight: bold;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            animation: comboPop 0.5s ease-out;
+            text-align: center;
+        `;
+        
+        // 애니메이션 CSS 추가
+        if (!document.querySelector('#combo-animations')) {
+            const style = document.createElement('style');
+            style.id = 'combo-animations';
+            style.textContent = `
+                @keyframes comboPop {
+                    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+                    50% { transform: translate(-50%, -50%) scale(1.2); }
+                    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+                }
+                .combo-count {
+                    display: block;
+                    font-size: 48px;
+                    margin-top: 10px;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(notification);
+        
+        // 알림 표시 시간 설정
+        const displayTime = isFinal ? 2000 : 800; // 콤보 알림은 더 빠르게 표시
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, displayTime);
     }
 
     /**
@@ -3104,6 +3382,14 @@ class Game {
             }
         });
         currentStage.completed = true;
+        
+        // this.stages 배열의 해당 스테이지도 completed 상태로 업데이트
+        const stageInArray = this.stages.find(s => s.world === this.player.currentStage.world && s.level === this.player.currentStage.level);
+        if (stageInArray) {
+            stageInArray.completed = true;
+            console.log(`✅ this.stages 배열의 스테이지 ${this.player.currentStage.world}-${this.player.currentStage.level} completed 상태 업데이트`);
+        }
+        
         // 현재 클리어한 스테이지 정보 저장 (진행 상태 업데이트 전)
         const clearedStage = {
             world: this.player.currentStage.world,
@@ -3116,9 +3402,10 @@ class Game {
         // 다음 스테이지 해금 (1-1부터 1-5까지만 존재)
         if (this.player.currentStage.world === 1 && this.player.currentStage.level < 5) {
             this.player.currentStage.level++;
-            // this.selectedStage = { world: 1, level: this.player.currentStage.level }; // 중복 증가 방지 위해 삭제
+            // 클리어한 스테이지 다음 단계로 자동 선택
+            this.selectedStage = { world: 1, level: this.player.currentStage.level };
             console.log(`🎯 다음 스테이지 해금: 1-${this.player.currentStage.level}`);
-            console.log(`🎯 선택된 스테이지 업데이트: ${this.selectedStage.world}-${this.selectedStage.level}`);
+            console.log(`🎯 선택된 스테이지 자동 업데이트: ${this.selectedStage.world}-${this.selectedStage.level}`);
         } else if (this.player.currentStage.world === 1 && this.player.currentStage.level === 5) {
             // 1-5를 클리어했다면 더 이상 진행할 스테이지가 없음
             this.player.currentStage.level = 6; // 모든 스테이지 클리어 상태로 설정
@@ -3126,11 +3413,23 @@ class Game {
             this.selectedStage = { world: 1, level: 5 };
         } else if (this.player.currentStage.level < 10) {
             this.player.currentStage.level++;
+            this.selectedStage = { world: this.player.currentStage.world, level: this.player.currentStage.level };
         } else if (this.player.currentStage.world < 3) {
             this.player.currentStage.world++;
             this.player.currentStage.level = 1;
+            this.selectedStage = { world: this.player.currentStage.world, level: 1 };
         }
         console.log('🎉 스테이지 클리어 처리 완료');
+        
+        // UI 업데이트
+        this.updateStageListUI();
+        
+        // 선택된 스테이지 정보도 UI에 반영
+        const selectedStageElement = document.getElementById('selected-stage');
+        if (selectedStageElement) {
+            selectedStageElement.textContent = `${this.selectedStage.world}-${this.selectedStage.level}`;
+        }
+        
         // 1-5 스테이지(마지막)만 챕터 완료 알림, 그 외에는 선택 팝업
         if (clearedStage.world === 1 && clearedStage.level === 5) {
             this.showChapterCompleteNotification(1);
@@ -4100,9 +4399,24 @@ class Game {
      * 스테이지 선택
      */
     selectStage(world, level) {
+        // 이미 선택된 스테이지를 다시 클릭한 경우 아무 동작 안함
+        if (this.selectedStage && this.selectedStage.world === world && this.selectedStage.level === level) {
+            console.log(`ℹ️ 스테이지 ${world}-${level}은 이미 선택되어 있습니다.`);
+            return;
+        }
+        
         // 비활성화된 스테이지 선택 방지
         if (level > this.player.currentStage.level) {
             console.log(`⚠️ 스테이지 ${world}-${level}은 아직 해금되지 않았습니다. 현재 진행 가능한 최고 레벨: ${this.player.currentStage.level}`);
+            this.showNotification(`스테이지 ${world}-${level}은 아직 해금되지 않았습니다. 스테이지 ${world}-${level - 1}을 클리어하세요.`);
+            return;
+        }
+        
+        // 이미 클리어된 스테이지 선택 방지
+        const stage = this.stages.find(s => s.world === world && s.level === level);
+        if (stage && stage.completed) {
+            console.log(`⚠️ 스테이지 ${world}-${level}은 이미 클리어되었습니다.`);
+            this.showNotification(`스테이지 ${world}-${level}은 이미 클리어되었습니다.`);
             return;
         }
         
@@ -4578,6 +4892,9 @@ class Game {
         // 스테이지 초기화
         this.stages = this.initializeStages();
         
+        // 스테이지 선택 상태 초기화 (1-1 스테이지로 설정)
+        this.selectedStage = { world: 1, level: 1 };
+        
         // 머지 히스토리 초기화
         this.mergeHistory = [];
         
@@ -4601,6 +4918,15 @@ class Game {
         // UI 업데이트
         this.renderBoard('main');
         this.updateUI();
+        
+        // 스테이지 리스트 명시적 업데이트 (초기화 후 1-1 스테이지가 선택되도록)
+        this.renderStageList();
+        
+        // 선택된 스테이지 정보도 UI에 반영
+        const selectedStageElement = document.getElementById('selected-stage');
+        if (selectedStageElement) {
+            selectedStageElement.textContent = `${this.selectedStage.world}-${this.selectedStage.level}`;
+        }
         
         // 메인 화면 표시
         this.showMainScreen();
@@ -4641,16 +4967,44 @@ class Game {
 
     // 다음 스테이지로 이동하는 함수 추가
     goToNextStage() {
-        // 다음 스테이지가 존재하는지 확인
-        if (this.selectedStage.world === 1 && this.selectedStage.level < 5) {
-            this.selectedStage.level++;
-            this.player.currentStage = { ...this.selectedStage };
-            this.startStage();
-        } else {
-            // 더 이상 다음 스테이지가 없으면 메인 화면으로 이동
-            this.showNotification('더 이상 진행할 스테이지가 없습니다!');
+        console.log(`🔍 goToNextStage 호출 - 현재 상태:`);
+        console.log(`  selectedStage: ${this.selectedStage.world}-${this.selectedStage.level}`);
+        console.log(`  currentStage: ${this.player.currentStage.world}-${this.player.currentStage.level}`);
+        
+        // 티켓이 부족한지 확인
+        if (this.player.tickets <= 0) {
+            this.hideStageCompleteNotification();
             this.showMainScreen();
             this.saveGameData();
+            
+            // 메인화면으로 이동한 후 티켓 부족 알림 표시
+            setTimeout(() => {
+                this.showNotification('🎫 티켓이 부족합니다! 티켓을 구매하거나 획득한 후 다시 시도해주세요.');
+            }, 500);
+            return;
+        }
+        
+        // 다음 스테이지가 존재하는지 확인
+        if (this.selectedStage.world === 1 && this.selectedStage.level <= 5) {
+            // completeStage에서 이미 다음 스테이지로 진행했으므로, 
+            // selectedStage를 currentStage와 동기화하여 올바른 다음 스테이지로 설정
+            this.selectedStage = { ...this.player.currentStage };
+            console.log(`🎯 다음 스테이지로 진행: ${this.selectedStage.world}-${this.selectedStage.level}`);
+            this.startStage();
+        } else {
+            console.log(`⚠️ 더 이상 진행할 스테이지가 없음:`);
+            console.log(`  selectedStage: ${this.selectedStage.world}-${this.selectedStage.level}`);
+            console.log(`  조건: world === 1 (${this.selectedStage.world === 1}), level < 5 (${this.selectedStage.level < 5})`);
+            
+            // 더 이상 다음 스테이지가 없으면 메인 화면으로 이동
+            this.hideStageCompleteNotification();
+            this.showMainScreen();
+            this.saveGameData();
+            
+            // 메인화면으로 이동한 후 알림 표시
+            setTimeout(() => {
+                this.showNotification('더 이상 진행할 스테이지가 없습니다!');
+            }, 500);
         }
     }
 
@@ -4658,29 +5012,48 @@ class Game {
         const stageList = document.getElementById('stage-list');
         if (!stageList) return;
         stageList.innerHTML = '';
+        
         // selectedStage가 클리어된 스테이지라면 자동으로 미클리어 스테이지로 변경
         let selected = this.selectedStage;
-        const isSelectedCleared = this.playerStage && this.playerStage[`1-${selected.level}`] && this.playerStage[`1-${selected.level}`].completed;
+        const selectedStage = this.stages.find(s => s.world === 1 && s.level === selected.level);
+        const isSelectedCleared = selectedStage && selectedStage.completed;
+        
         if (isSelectedCleared) {
             // 가장 낮은 미클리어 스테이지 찾기
+            let nextUnclearedStage = null;
             for (let i = 1; i <= 5; i++) {
-                if (!this.playerStage[`1-${i}`] || !this.playerStage[`1-${i}`].completed) {
-                    this.selectedStage = { world: 1, level: i };
-                    selected = this.selectedStage;
+                const stage = this.stages.find(s => s.world === 1 && s.level === i);
+                if (!stage || !stage.completed) {
+                    nextUnclearedStage = i;
                     break;
                 }
+            }
+            
+            if (nextUnclearedStage) {
+                this.selectedStage = { world: 1, level: nextUnclearedStage };
+                selected = this.selectedStage;
+                console.log(`🔄 클리어된 스테이지 선택 감지, 자동으로 다음 미클리어 스테이지로 변경: 1-${nextUnclearedStage}`);
             }
         }
         for (let i = 1; i <= 5; i++) {
             const stage = this.stages.find(s => s.world === 1 && s.level === i);
             const li = document.createElement('li');
             li.className = 'stage-item';
-            const isCleared = this.playerStage && this.playerStage[`1-${i}`] && this.playerStage[`1-${i}`].completed;
+            
+            const stageData = this.stages.find(s => s.world === 1 && s.level === i);
+            const isCleared = stageData && stageData.completed;
+            const isUnlocked = i <= this.player.currentStage.level;
+            
             li.textContent = `스테이지 1-${i}`;
+            
             if (isCleared) {
                 li.classList.add('cleared');
                 li.classList.add('disabled');
                 li.title = '이미 클리어한 스테이지입니다.';
+            } else if (!isUnlocked) {
+                li.classList.add('locked');
+                li.classList.add('disabled');
+                li.title = `스테이지 1-${i-1}을 클리어해야 해금됩니다.`;
             } else {
                 if (selected.level === i) {
                     li.classList.add('selected');
@@ -4699,7 +5072,8 @@ class Game {
         // 스테이지 시작 버튼 활성/비활성 상태 갱신
         const stageBtn = document.getElementById('stage-btn');
         const selected = this.selectedStage;
-        const isCleared = this.playerStage && this.playerStage[`1-${selected.level}`] && this.playerStage[`1-${selected.level}`].completed;
+        const stage = this.stages.find(s => s.world === 1 && s.level === selected.level);
+        const isCleared = stage && stage.completed;
         if (stageBtn) {
             if (isCleared) {
                 stageBtn.classList.add('disabled');
@@ -4718,7 +5092,8 @@ class Game {
         if (!stageBtn) return;
         stageBtn.onclick = () => {
             const selected = this.selectedStage;
-            const isCleared = this.playerStage && this.playerStage[`1-${selected.level}`] && this.playerStage[`1-${selected.level}`].completed;
+            const stage = this.stages.find(s => s.world === 1 && s.level === selected.level);
+            const isCleared = stage && stage.completed;
             if (isCleared) {
                 this.showNotification('이미 클리어한 스테이지는 입장할 수 없습니다!');
                 return;
@@ -4744,8 +5119,54 @@ class Game {
         board[resourceB.y][resourceB.x] = resourceB;
         // UI 갱신
         this.renderBoard(boardType);
+        
+        // 서브 머지(스테이지)에서는 자동 머지 비활성화
+        const autoMergeEnabled = boardType === 'main' ? this.player.hasAutoMerge : false;
+        
+        // 머지 확인을 순차적으로 처리하여 한 번에 하나씩만 머지되도록 함
+        this.processSequentialMerges(resourceA, resourceB, boardType, autoMergeEnabled);
+        
         // 상태 저장
         if (boardType === 'main') this.saveGameData();
+    }
+
+    /**
+     * 순차적 머지 처리 - 한 번에 하나씩만 머지되도록 보장
+     */
+    processSequentialMerges(resourceA, resourceB, boardType, autoMergeEnabled) {
+        const board = boardType === 'main' ? this.board : this.stageBoard;
+        const boardSize = boardType === 'main' ? 5 : this.stageBoardSize;
+        
+        // 1. A 자원 머지 확인 (드래그한 자원)
+        const mergePairA = this.findMergePairFlexible(board, resourceA.x, resourceA.y, resourceA.type, resourceA.level, boardSize);
+        if (mergePairA.length === 2) {
+            console.log(`✅ A 자원 머지 실행: ${resourceA.type} Lv.${resourceA.level} at (${resourceA.x}, ${resourceA.y})`);
+            this.executeMerge(mergePairA, boardType);
+            
+            // 머지 후 UI 갱신
+            this.renderBoard(boardType);
+            
+            // 자동 머지 아이템이 있다면 연쇄 머지 확인
+            if (autoMergeEnabled && this.player.hasAutoMerge) {
+                setTimeout(() => this.checkForMerges(boardType, true), 600);
+                return; // 연쇄 머지가 시작되면 B 자원 머지는 건너뛰기
+            }
+        }
+        
+        // 2. B 자원 머지 확인 (원래 A 위치로 이동된 자원)
+        const mergePairB = this.findMergePairFlexible(board, resourceB.x, resourceB.y, resourceB.type, resourceB.level, boardSize);
+        if (mergePairB.length === 2) {
+            console.log(`✅ B 자원 머지 실행: ${resourceB.type} Lv.${resourceB.level} at (${resourceB.x}, ${resourceB.y})`);
+            this.executeMerge(mergePairB, boardType);
+            
+            // 머지 후 UI 갱신
+            this.renderBoard(boardType);
+            
+            // 자동 머지 아이템이 있다면 연쇄 머지 확인
+            if (autoMergeEnabled && this.player.hasAutoMerge) {
+                setTimeout(() => this.checkForMerges(boardType, true), 600);
+            }
+        }
     }
 
     /**
